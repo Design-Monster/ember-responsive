@@ -1,10 +1,10 @@
-import Ember from 'ember';
 import { run } from '@ember/runloop';
 import Service from '@ember/service';
 import { classify, dasherize } from '@ember/string';
 import { getOwner } from '@ember/application';
 import Evented from '@ember/object/evented';
 import { tracked, TrackedObject } from 'tracked-built-ins';
+import { macroCondition, isTesting } from '@embroider/macros';
 
 /**
  * Handles detecting and responding to media queries.
@@ -74,9 +74,8 @@ import { tracked, TrackedObject } from 'tracked-built-ins';
  * @extends Ember.Service
  */
 export default class MediaService extends Service.extend(Evented) {
-  // Ember only sets Ember.testing when tests are starting
-  // eslint-disable-next-line ember/no-ember-testing-in-module-scope
-  _mocked = Ember.testing;
+  // Use @embroider/macros to detect test mode instead of deprecated Ember.testing
+  _mocked = macroCondition(isTesting()) ? true : false;
   _mockedBreakpoint = 'desktop';
 
   /**
@@ -89,14 +88,12 @@ export default class MediaService extends Service.extend(Evented) {
   get enabled() {
     return !!window?.matchMedia;
   }
-
   /**
    * @property _matches
    * @type TrackedArray<string>
    * @private
    */
   @tracked _matches = [];
-
   /**
    * A TrackedArray of matching matchers.
    *
@@ -107,12 +104,14 @@ export default class MediaService extends Service.extend(Evented) {
     if (this._matches.length) {
       return this._matches;
     }
-    return Ember.testing && this._mocked ? [this._mockedBreakpoint] : [];
+    if (macroCondition(isTesting())) {
+      return this._mocked ? [this._mockedBreakpoint] : [];
+    }
+    return [];
   }
   set matches(value) {
     this._matches = value;
   }
-
   /**
    * A hash of listeners indexed by their matcher's names
    *
@@ -120,7 +119,6 @@ export default class MediaService extends Service.extend(Evented) {
    * @type Record<string, MediaQueryListEvent>
    */
   listeners = {};
-
   /**
    * A hash of matchers by breakpoint name
    *
@@ -128,7 +126,6 @@ export default class MediaService extends Service.extend(Evented) {
    * @type Record<string, MediaQueryList>
    */
   matchers = {};
-
   /**
    * The matcher to use for testing media queries.
    *
@@ -138,22 +135,17 @@ export default class MediaService extends Service.extend(Evented) {
    * @private
    */
   mql = window?.matchMedia;
-
   /**
    * Initialize service based on the breakpoints config
    */
   constructor() {
     super(...arguments);
-
     const breakpoints = getOwner(this).lookup('breakpoints:main');
-
     if (!breakpoints || !this.enabled) {
       return;
     }
-
     Object.keys(breakpoints).forEach((name) => {
       const getterName = `is${classify(name)}`;
-
       Object.defineProperties(this, {
         [getterName]: new TrackedObject({
           get() {
@@ -166,11 +158,9 @@ export default class MediaService extends Service.extend(Evented) {
           }
         })
       });
-
       this.match(name, breakpoints[name]);
     });
   }
-
   /**
    * A string composed of all the matching matchers' names, turned into
    * friendly, dasherized class-names that are prefixed with `media-`.
@@ -181,51 +171,33 @@ export default class MediaService extends Service.extend(Evented) {
   get classNames() {
     return this.matches.map((match) => `media-${dasherize(match)}`).join(' ');
   }
-
   _triggerMediaChanged() {
     this.trigger('mediaChanged', {});
   }
-
   _triggerEvent() {
     run(this, this._triggerMediaChanged);
   }
-
   /**
-   * Adds a new matcher to the list.
-   *
-   * After this method is called, you will be able to access the result
-   * of the matcher as a property on this object.
-   *
-   * **Adding a new matcher**
-   *
-   * ```javascript
-   * media.match('all', 'all');
-   * media.all;
-   *   // => instanceof window.matchMedia
-   * media.all.matches;
-   *   // => true
-   * ```
-   *
-   * @param string name The name of the matcher
-   * @param string query The media query to match against
-   * @method match
+	@@ -212,9 +214,14 @@
    */
   match(name, query) {
     // see https://github.com/ember-cli/eslint-plugin-ember/pull/272
-    if ((Ember.testing && this._mocked) || !this.enabled) {
+    if (!this.enabled) {
       return;
+    }
+    if (macroCondition(isTesting())) {
+      if (this._mocked) {
+        return;
+      }
     }
 
     const mql = this.mql,
       matcher = mql(query);
-
     const listener = (matcher) => {
       if (this.isDestroyed || this.isDestroying) {
         return;
       }
-
       this.matchers[name] = matcher;
-
       if (matcher.matches) {
         this.matches = Array.from(new Set([...this.matches, name]));
       } else {
@@ -233,14 +205,11 @@ export default class MediaService extends Service.extend(Evented) {
           new Set(this.matches.filter((key) => key !== name))
         );
       }
-
       if (this.listeners[name] !== matcher) {
         this._triggerEvent();
       }
     };
-
     this.listeners[name] = listener;
-
     if (typeof matcher.addEventListener === 'function') {
       matcher.addEventListener('change', (matcher) => {
         run(null, listener, matcher);
@@ -250,7 +219,6 @@ export default class MediaService extends Service.extend(Evented) {
         run(null, listener, matcher);
       });
     }
-
     listener(matcher);
   }
 }
